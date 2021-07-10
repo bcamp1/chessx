@@ -95,7 +95,13 @@ function toIndex(loc) {
 }
 
 function isValid(loc) {
-    return toIndex(loc) >= 0 && toIndex(loc) <= 63
+    return (loc.x >= 0 && loc.y >= 0 && loc.x <= 7 && loc.y <= 7)
+}
+
+function isEqual(loc1, loc2) {
+    if (!isValid(loc1) || !isValid(loc2)) throw 'loc(s) not valid'
+    var eval = toIndex(loc1) == toIndex(loc2)
+    return eval
 }
 
 function indexToLoc(index) {
@@ -178,6 +184,21 @@ function fromFEN(fenString) {
     return board
 }
 
+function copyBoardState(boardState) {
+    var newBoardState = new BoardState
+    newBoardState.moveNumber = boardState.moveNumber
+    newBoardState.turn = boardState.turn
+
+    newBoardState.whiteCastleKing = boardState.whiteCastleKing
+    newBoardState.whiteCastleQueen = boardState.whiteCastleKing
+    newBoardState.blackCastleKing = boardState.whiteCastleKing
+    newBoardState.blackCastleQueen = boardState.whiteCastleKing
+
+    newBoardState.data = [...boardState.data]
+
+    return newBoardState
+}
+
 class BoardState {
     constructor() {
         this.moveNumber = 0
@@ -198,17 +219,16 @@ class BoardState {
     print() {
         console.log('move ' + this.moveNumber)
         console.log(this.turn + ' to move')
-        console.log('-'.repeat(19))
+        console.log('  ' + '-'.repeat(19))
         for (var i = 0; i < 8; i++) {
             let slice = this.data.slice(8*i, 8*i + 8)
-            console.log('| ' + slice.join(' ') + ' |')
+            console.log((8-i) + ' | ' + slice.join(' ') + ' |')
         }
-        console.log('-'.repeat(19))
+        console.log('  ' + '-'.repeat(19))
+        console.log('    a b c d e f g h')
         console.log()
 
     }
-
-    
 
     piece(loc) {
         return this.data[toIndex(loc)]
@@ -232,9 +252,20 @@ class BoardState {
         this.remove(loc)
     }
 
-  
+    findKing(color) {
+        var info = {
+            type: pieces.KING,
+            color: color
+        }
 
-    colorLocs(color) {
+        var piece = infoTo(info)
+        var index = this.data.findIndex(element => element == piece)
+        if (index == -1) throw 'king not found'
+        var loc = indexToLoc(index)
+        return loc
+    }
+
+    findColor(color) {
         var locs = []
         this.data.forEach((element, index) => {
             if (pieceInfo(element).color == color) {
@@ -246,6 +277,7 @@ class BoardState {
     }
 
     getOccupancy(loc, color) {
+
         if (!isValid(loc)) return occupancy.INVALID
         var info = pieceInfo(this.piece(loc))
         if (info.color == colors.NONE) return occupancy.EMPTY
@@ -324,7 +356,7 @@ class Game {
         }
 
         var pieceLetter = piece.toUpperCase()
-        if (pieceLetter = 'P') pieceLetter = ''
+        if (pieceLetter == 'P') pieceLetter = ''
         var notation = toNotation(loc2)
 
         var info = pieceInfo(piece)
@@ -333,6 +365,9 @@ class Game {
         if (oc == occupancy.EMPTY) {
             return pieceLetter + notation
         } else if (oc == occupancy.ENEMY) {
+            if (info.type == pieces.PAWN) {
+                return toNotation(loc).charAt(0) + 'x' + notation
+            }
             return pieceLetter + 'x' + notation
         } else {
             return pieceLetter + '?' + notation
@@ -347,10 +382,62 @@ class Game {
         return moveSet
     }
 
-    printRawMoves(boardState, loc) {
+    getRawPGNMoves(boardState, loc) {
         var options = this.getRawMoves(boardState, loc)
         var moveSet = this.toPGNMoveSet(boardState, loc, options)
-        console.log('Moves: ' + moveSet.join(', '))
+        return moveSet
+    }
+
+    isKingInCheck(boardState, color) {
+        var kingLoc = boardState.findKing(color)
+        var enemyLocs = boardState.findColor(enemyColor(color))
+        var enemyIndexes = enemyLocs.map(value => toIndex(value))
+        var matrix = this.getRawMoveMatrix(boardState)
+
+        for (var j = 0; j < enemyIndexes.length; j++) {
+            var index = enemyIndexes[j]
+            var moveSet = matrix[index]
+            var found = moveSet.findIndex(move => isEqual(move, kingLoc))
+            if (found != -1) return true
+        }   
+
+        return false
+
+    }
+
+    getLegalMoveMatrix(boardState) {
+        var matrix = []
+
+        for (var i = 0; i < 64; i++) {
+            matrix[i] = this.getLegalMoves(boardState, indexToLoc(i))
+        }
+
+        return matrix
+    }
+
+    getLegalMoves(boardState, loc) {
+        var info = pieceInfo(boardState.piece(loc))
+        var legalMoves = []
+        var rawMoves = this.getRawMoves(boardState, loc)
+        rawMoves.forEach(rawMove => {
+            var theoreticalBoard = copyBoardState(boardState)
+            theoreticalBoard.move(loc, rawMove)
+            if (!this.isKingInCheck(theoreticalBoard, info.color)) {
+                legalMoves.push(rawMove)
+            }
+        })
+
+        return legalMoves
+    }
+
+    getRawMoveMatrix(boardState) {
+        var matrix = []
+
+        for (var i = 0; i < 64; i++) {
+            matrix[i] = this.getRawMoves(boardState, indexToLoc(i))
+        }
+
+        return matrix
     }
 
     getRawMoves(boardState, loc) {
@@ -408,20 +495,37 @@ class Game {
                         moves.push(potentialMove)
                     }
                 })
-
-
                 break
             case pieces.BISHOP:
-
+                moves = moves.concat(boardState.traverse(loc, direction.DIAGPLUS))
+                moves = moves.concat(boardState.traverse(loc, direction.DIAGMINUS))
                 break
             case pieces.KNIGHT:
-
+                [
+                    {x: loc.x - 1, y: loc.y + 2},
+                    {x: loc.x + 1, y: loc.y + 2},
+                    {x: loc.x - 2, y: loc.y + 1},
+                    {x: loc.x + 2, y: loc.y + 1},
+                    {x: loc.x - 2, y: loc.y - 1},
+                    {x: loc.x + 2, y: loc.y - 1},
+                    {x: loc.x - 1, y: loc.y - 2},
+                    {x: loc.x + 1, y: loc.y - 2},
+                ].forEach(potentialMove => {
+                    var oc = boardState.getOccupancy(potentialMove, info.color)
+                    if (oc == occupancy.EMPTY || oc == occupancy.ENEMY) {
+                        moves.push(potentialMove)
+                    }
+                })
                 break
             case pieces.ROOK:
-
+                moves = moves.concat(boardState.traverse(loc, direction.HORIZONTAL))
+                moves = moves.concat(boardState.traverse(loc, direction.VERTICAL))
                 break
             case pieces.QUEEN:
-
+                moves = moves.concat(boardState.traverse(loc, direction.DIAGPLUS))
+                moves = moves.concat(boardState.traverse(loc, direction.DIAGMINUS))
+                moves = moves.concat(boardState.traverse(loc, direction.HORIZONTAL))
+                moves = moves.concat(boardState.traverse(loc, direction.VERTICAL))
                 break
             case pieces.NONE:
                 throw 'invalid piece'
@@ -437,10 +541,24 @@ class Game {
 var boardState = fromFEN('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')
 boardState.move(loc('e2'), loc('e4'))
 boardState.move(loc('f2'), loc('f4'))
+boardState.move(loc('g2'), loc('g4'))
+boardState.move(loc('b7'), loc('b5'))
+boardState.move(loc('d1'), loc('e5'))
+
+boardState.move(loc('h8'), loc('e3'))
+boardState.move(loc('e1'), loc('d1'))
+boardState.move(loc('a8'), loc('d6'))
 var game = new Game(boardState)
 game.history[0].print()
 
-console.log(game.printRawMoves(boardState, loc('d2')))
+var mat = game.getLegalMoveMatrix(boardState)
+
+mat.forEach((elem, index) => {
+    var loc = indexToLoc(index)
+    if (elem.length != 0) {
+        console.log(toNotation(loc) + ': ' + elem.map(value => game.toPGNMove(boardState, loc, value)).join(' '))
+    }
+})
 
 
 
