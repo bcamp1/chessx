@@ -448,8 +448,65 @@ class Game {
         return Object.keys(dict) == 0 && !this.isKingInCheck(boardState, color)
     }
 
-    canKingCastleShort(boardState, color) {
-        var kingLoc = boardState
+    canKingCastle(boardState, color, dir) {
+        if (!boardState.castlePrivs[color][dir]) return false
+        if (this.isKingInCheck(boardState, color)) return false
+
+        var loc1, loc2, loc3, rookLoc
+        var emptyLocs
+        switch (color) {
+            case colors.BLACK:
+                loc1 = loc('e8')
+                if (dir == castleDir.KINGSIDE) {
+                    loc2 = loc('f8')
+                    loc3 = loc('g8')
+                    rookLoc = loc('h8')
+                    emptyLocs = [loc('f8'), loc('g8')]
+                } else {
+                    loc2 = loc('d8')
+                    loc3 = loc('c8')
+                    rookLoc = loc('a8')
+                    emptyLocs = [loc('d8'), loc('c8'), loc('b8')]
+                }
+            break
+            case colors.WHITE:
+                loc1 = loc('e1')
+                if (dir == castleDir.KINGSIDE) {
+                    loc2 = loc('f1')
+                    loc3 = loc('g1')
+                    rookLoc = loc('h1')
+                    emptyLocs = [loc('f1'), loc('g1')]
+                } else {
+                    loc2 = loc('d1')
+                    loc3 = loc('c1')
+                    rookLoc = loc('a1')
+                    emptyLocs = [loc('d1'), loc('c1'), loc('b1')]
+                }
+            break
+        }
+
+        // 1 - King in correct place
+        if (!isEqual(boardState.findKing(color), loc1)) return false
+
+        // 2 - Rook in correct place
+        var rookInfo = pieceInfo(boardState.piece(rookLoc))
+        if (rookInfo.type != pieces.ROOK || rookInfo.color != color) return false
+
+        // 3 - No pieces between king and rook
+        for (var i = 0; i < emptyLocs.length; i++) {
+            var emptyLoc = emptyLocs[i]
+            if (boardState.piece(emptyLoc) != ' ') return false
+        }
+
+        // 4 - King not under attack on passing square (loc2)
+        var theoretical1 = this.processMove(boardState, loc1, loc2)
+        if (this.isKingInCheck(theoretical1, color)) return false
+
+        // 5 - King not under attack on final square (loc3)
+        var theoretical2 = this.processMove(boardState, loc1, loc3)
+        if (this.isKingInCheck(theoretical2, color)) return false
+
+        return true
     }
 
     getPGNDictionary(boardState, matrix) {
@@ -505,7 +562,7 @@ class Game {
             // theoreticalBoard.move(loc, rawMove)
             //console.log('checking ' + this.toPGNMove(boardState, loc, rawMove))
 
-            var theoreticalBoard = this.processMove(copyBoardState(boardState), loc, rawMove)
+            var theoreticalBoard = this.processMove(boardState, loc, rawMove)
             if (!this.isKingInCheck(theoreticalBoard, info.color)) {
                 legalMoves.push(rawMove)
             }
@@ -625,7 +682,9 @@ class Game {
         return moves
     }
 
-    processMove(boardState, loc, loc2) {
+    processMove(bs, loc, loc2) {
+        var boardState = copyBoardState(bs)
+
         var piece = boardState.piece(loc)
         var info = pieceInfo(piece)
         if (piece == ' ') {
@@ -707,6 +766,13 @@ class Game {
                 console.log('STALEMATE - draw!')
                 return
             }
+            
+            var castleKing = this.canKingCastle(this.history[this.history.length - 1], this.turn, castleDir.KINGSIDE)
+            var castleQueen = this.canKingCastle(this.history[this.history.length - 1], this.turn, castleDir.QUEENSIDE)
+            
+            console.log('Can castle short? ' + castleKing)
+            console.log('Can castle long? ' + castleQueen)
+
             var newBoardState = await this.makeMove(this.history[this.history.length - 1], this.turn)
             if (this.turn == colors.BLACK) {
                 this.move += 1
