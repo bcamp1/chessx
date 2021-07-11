@@ -1,4 +1,5 @@
 import input from 'input';
+import { Timer } from 'timer-node';
 
 const pieces = {
     NONE: ' ',
@@ -205,6 +206,7 @@ function copyBoardState(boardState) {
     newBoardState.turn = boardState.turn
 
     newBoardState.castlePrivs = JSON.parse(JSON.stringify(boardState.castlePrivs))
+    newBoardState.castleAbility = JSON.parse(JSON.stringify(boardState.castleAbility))
 
     if (boardState.enPassant == null) {
         newBoardState.enPassant = null
@@ -223,6 +225,17 @@ class BoardState {
         this.turn = colors.WHITE
 
         this.castlePrivs = {
+            'white': {
+                'O-O': false,
+                'O-O-O': false,
+            },
+            'black': {
+                'O-O': false,
+                'O-O-O': false,
+            }
+        }
+
+        this.castleAbility = {
             'white': {
                 'O-O': false,
                 'O-O-O': false,
@@ -378,26 +391,54 @@ class Game {
         this.move = 1
         this.turn = colors.WHITE
         this.history = [initialBoardState]
+
+        this.history[0].castleAbility[colors.WHITE][castleDir.KINGSIDE] = this.canKingCastle(boardState, colors.WHITE, castleDir.KINGSIDE)
+        this.history[0].castleAbility[colors.WHITE][castleDir.QUEENSIDE] = this.canKingCastle(boardState, colors.WHITE, castleDir.QUEENSIDE)
+        this.history[0].castleAbility[colors.BLACK][castleDir.KINGSIDE] = this.canKingCastle(boardState, colors.BLACK, castleDir.KINGSIDE)
+        this.history[0].castleAbility[colors.BLACK][castleDir.QUEENSIDE] = this.canKingCastle(boardState, colors.BLACK, castleDir.QUEENSIDE)
     }
 
-    toPGNMove(boardState, loc, loc2) {
-        var piece = boardState.piece(loc)
+    toPGNMove(boardState, loc1, loc2) {
+        var piece = boardState.piece(loc1)
         if (piece == ' ') {
             throw "toPGNMove: Trying to move piece that doesn't exist"
         }
 
         var pieceLetter = piece.toUpperCase()
-        if (pieceLetter == 'P') pieceLetter = ''
         var notation = toNotation(loc2)
-
         var info = pieceInfo(piece)
         var oc = boardState.getOccupancy(loc2, info.color)
 
+
+        // Castle
+        if (pieceLetter == 'K') {
+            if (info.color == colors.WHITE) {
+                if (isEqual(loc1, loc('e1'))) {
+                    if (isEqual(loc2, loc('g1'))) {
+                        return 'O-O'
+                    } else if (isEqual(loc2, loc('c1'))) {
+                        return 'O-O-O'
+                    }
+                }
+            } else if (info.color == colors.BLACK) {
+                if (isEqual(loc1, loc('e8'))) {
+                    if (isEqual(loc2, loc('g8'))) {
+                        return 'O-O'
+                    } else if (isEqual(loc2, loc('c8'))) {
+                        return 'O-O-O'
+                    }
+                }
+            }
+        }
+
+
+        if (pieceLetter == 'P') pieceLetter = ''
+        
         if (oc == occupancy.EMPTY) {
             return pieceLetter + notation
         } else if (oc == occupancy.ENEMY) {
             if (info.type == pieces.PAWN) {
-                return toNotation(loc).charAt(0) + 'x' + notation
+                return toNotation(loc1).charAt(0) + 'x' + notation
             }
             return pieceLetter + 'x' + notation
         } else {
@@ -485,6 +526,8 @@ class Game {
             break
         }
 
+
+
         // 1 - King in correct place
         if (!isEqual(boardState.findKing(color), loc1)) return false
 
@@ -499,14 +542,38 @@ class Game {
         }
 
         // 4 - King not under attack on passing square (loc2)
-        var theoretical1 = this.processMove(boardState, loc1, loc2)
+        var theoretical1 = this.processRawMove(boardState, loc1, loc2)
         if (this.isKingInCheck(theoretical1, color)) return false
 
         // 5 - King not under attack on final square (loc3)
-        var theoretical2 = this.processMove(boardState, loc1, loc3)
+        var theoretical2 = this.processRawMove(boardState, loc1, loc3)
         if (this.isKingInCheck(theoretical2, color)) return false
 
         return true
+    }
+
+    castleEndLoc(color, dir) {
+        switch (color) {
+            case colors.BLACK:
+                if (dir == castleDir.KINGSIDE) {
+                    return loc('g8')
+                } else if (dir == castleDir.QUEENSIDE) {
+                    return loc('c8')
+                } else {
+                    throw 'invalid castleDir ' + dir
+                }
+            break
+            case colors.WHITE:
+                if (dir == castleDir.KINGSIDE) {
+                    return loc('g1')
+                } else if (dir == castleDir.QUEENSIDE) {
+                    return loc('c1')
+                } else {
+                    throw 'invalid castleDir ' + dir
+                }
+            break
+        }
+        throw 'Invalid color ' + color
     }
 
     getPGNDictionary(boardState, matrix) {
@@ -642,6 +709,16 @@ class Game {
                         moves.push(potentialMove)
                     }
                 })
+
+                // Castling
+                //console.log('calling canKingCastle')
+                if (boardState.castleAbility[info.color][castleDir.KINGSIDE]) {
+                    moves.push(this.castleEndLoc(info.color, castleDir.KINGSIDE))
+                }
+
+                if (boardState.castleAbility[info.color][castleDir.QUEENSIDE]) {
+                    moves.push(this.castleEndLoc(info.color, castleDir.QUEENSIDE))
+                }
                 break
             case pieces.BISHOP:
                 moves = moves.concat(boardState.traverse(loc, direction.DIAGPLUS))
@@ -682,7 +759,7 @@ class Game {
         return moves
     }
 
-    processMove(bs, loc, loc2) {
+    processRawMove(bs, loc, loc2) {
         var boardState = copyBoardState(bs)
 
         var piece = boardState.piece(loc)
@@ -690,6 +767,24 @@ class Game {
         if (piece == ' ') {
             console.log('ERROR')
             console.log(`loc: ${toNotation(loc)}, loc2: ${toNotation(loc2)}`)
+            boardState.print()
+            throw "processMove: Trying to move piece that doesn't exist"
+        }
+
+        boardState.move(loc, loc2)
+
+        return copyBoardState(boardState)
+
+    }
+
+    processMove(bs, loc1, loc2, checkCastling = false) {
+        var boardState = copyBoardState(bs)
+
+        var piece = boardState.piece(loc1)
+        var info = pieceInfo(piece)
+        if (piece == ' ') {
+            console.log('ERROR')
+            console.log(`loc1: ${toNotation(loc1)}, loc2: ${toNotation(loc2)}`)
             boardState.print()
             throw "processMove: Trying to move piece that doesn't exist"
         }
@@ -715,10 +810,10 @@ class Game {
                 boardState.enPassant = null
             } else {
                 // En Passant - Enabling
-                if (isEqual(loc2, t(loc, direction.VERTICAL, 2))) {
-                    boardState.enPassant = t(loc, direction.VERTICAL, 1)
-                } else if (isEqual(loc2, t(loc, direction.VERTICAL, -2))) {
-                    boardState.enPassant = t(loc, direction.VERTICAL, -1)
+                if (isEqual(loc2, t(loc1, direction.VERTICAL, 2))) {
+                    boardState.enPassant = t(loc1, direction.VERTICAL, 1)
+                } else if (isEqual(loc2, t(loc1, direction.VERTICAL, -2))) {
+                    boardState.enPassant = t(loc1, direction.VERTICAL, -1)
                 } else {
                     boardState.enPassant = null
                 }
@@ -726,8 +821,37 @@ class Game {
         } else {
             boardState.enPassant = null
         }
+        
+        if (checkCastling) {
+            // Set castle ability
+            boardState.castleAbility[colors.WHITE][castleDir.KINGSIDE] = this.canKingCastle(boardState, colors.WHITE, castleDir.KINGSIDE)
+            boardState.castleAbility[colors.WHITE][castleDir.QUEENSIDE] = this.canKingCastle(boardState, colors.WHITE, castleDir.QUEENSIDE)
+            boardState.castleAbility[colors.BLACK][castleDir.KINGSIDE] = this.canKingCastle(boardState, colors.BLACK, castleDir.KINGSIDE)
+            boardState.castleAbility[colors.BLACK][castleDir.QUEENSIDE] = this.canKingCastle(boardState, colors.BLACK, castleDir.QUEENSIDE)
+        
 
-        boardState.move(loc, loc2)
+            // castle privs
+            if (info.type == pieces.KING) {
+                boardState.castlePrivs[info.color][castleDir.KINGSIDE] = false
+                boardState.castlePrivs[info.color][castleDir.QUEENSIDE] = false
+            }
+
+            if (boardState.piece(loc('a1')) != 'R') {
+                boardState.castlePrivs[colors.WHITE][castleDir.QUEENSIDE] = false
+            }
+            if (boardState.piece(loc('h1')) != 'R') {
+                boardState.castlePrivs[colors.WHITE][castleDir.KINGSIDE] = false
+            }
+            if (boardState.piece(loc('a8')) != 'r') {
+                boardState.castlePrivs[colors.BLACK][castleDir.QUEENSIDE] = false
+            }
+            if (boardState.piece(loc('h8')) != 'r') {
+                boardState.castlePrivs[colors.BLACK][castleDir.KINGSIDE] = false
+            }
+
+        }
+
+        boardState.move(loc1, loc2)
 
         return copyBoardState(boardState)
 
@@ -737,15 +861,20 @@ class Game {
         boardState.print()
         var valid = false
 
+        const timer = new Timer({ label: 'test-timer' });
+        timer.start()
+
         // Generate dictionary
         var mat = this.getLegalMoveMatrixOfColor(boardState, color)
         var dict = this.getPGNDictionary(boardState, mat)
+
+        console.log(timer.ms())
 
         while (!valid) {
             var move = await input.text('Please enter a move: ')
             move = move.trim()
             if (move in dict) {
-                var newBoardState = this.processMove(boardState, dict[move].loc, dict[move].loc2)
+                var newBoardState = this.processMove(boardState, dict[move].loc, dict[move].loc2, true)
                 return newBoardState
             } else {
                 console.log('Invalid move. Legal moves are: ' + Object.keys(dict).join(', '))
@@ -788,7 +917,8 @@ class Game {
 
 }
 
-var boardState = fromFEN('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')
+//var boardState = fromFEN('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')
+var boardState = fromFEN('rnbqk2r/pppp1ppp/3b1n2/4p3/4P3/3B1N2/PPPP1PPP/RNBQK2R w KQkq - 4 4')
 
 var game = new Game(boardState)
 game.playCLIGame(boardState).then(() => {
