@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "main": "chessx.js",
+  "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node chessx.js"
@@ -12,5 +13,8 @@
   "devDependencies": {
     "tslint": "^5.12.1",
     "typescript": "^3.3.3"
+  },
+  "dependencies": {
+    "input": "^1.0.1"
   }
 }

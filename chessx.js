@@ -1,3 +1,5 @@
+import input from 'input';
+
 const pieces = {
     NONE: ' ',
     KING: 'k',
@@ -26,6 +28,11 @@ const direction = {
     VERTICAL: 'vertical',
     DIAGPLUS: 'diagplus',
     DIAGMINUS: 'diagminus',
+}
+
+const castleDir = {
+    KINGSIDE: 'O-O',
+    QUEENSIDE: 'O-O-O',
 }
 
 function enemyColor(color) {
@@ -99,9 +106,9 @@ function isValid(loc) {
 }
 
 function isEqual(loc1, loc2) {
-    if (!isValid(loc1) || !isValid(loc2)) throw 'loc(s) not valid'
-    var eval = toIndex(loc1) == toIndex(loc2)
-    return eval
+    if (loc1 == null || loc2 == null) return false
+    //if (!isValid(loc1) || !isValid(loc2)) throw 'loc(s) not valid'
+    return toIndex(loc1) == toIndex(loc2)
 }
 
 function indexToLoc(index) {
@@ -164,18 +171,26 @@ function fromFEN(fenString) {
     for (var i = 0; i < castling.length; i++) {
         switch(castling.charAt(i)) {
             case 'K':
-                board.whiteCastleKing = true
+                board.castlePrivs[colors.WHITE][castleDir.KINGSIDE] = true
                 break
             case 'Q':
-                board.whiteCastleQueen = true
+                board.castlePrivs[colors.WHITE][castleDir.QUEENSIDE] = true
                 break
             case 'k':
-                board.blackCastleKing = true
+                board.castlePrivs[colors.BLACK][castleDir.KINGSIDE] = true
                 break
             case 'q':
-                board.blackCastleQueen = true
+                board.castlePrivs[colors.BLACK][castleDir.QUEENSIDE] = true
                 break
         }
+    }
+
+    var enPassantInfo = arr[3]
+
+    if (enPassantInfo == '-') {
+        board.enPassant = null
+    } else {
+        board.enPassant = loc(enPassantInfo)
     }
 
     var moveStr = arr[5]
@@ -189,10 +204,13 @@ function copyBoardState(boardState) {
     newBoardState.moveNumber = boardState.moveNumber
     newBoardState.turn = boardState.turn
 
-    newBoardState.whiteCastleKing = boardState.whiteCastleKing
-    newBoardState.whiteCastleQueen = boardState.whiteCastleKing
-    newBoardState.blackCastleKing = boardState.whiteCastleKing
-    newBoardState.blackCastleQueen = boardState.whiteCastleKing
+    newBoardState.castlePrivs = JSON.parse(JSON.stringify(boardState.castlePrivs))
+
+    if (boardState.enPassant == null) {
+        newBoardState.enPassant = null
+    } else {
+        newBoardState.enPassant = {x: boardState.enPassant.x, y: boardState.enPassant.y}
+    }
 
     newBoardState.data = [...boardState.data]
 
@@ -204,10 +222,18 @@ class BoardState {
         this.moveNumber = 0
         this.turn = colors.WHITE
 
-        this.whiteCastleKing = false
-        this.whiteCastleQueen = false
-        this.blackCastleKing = false
-        this.blackCastleQueen = false
+        this.castlePrivs = {
+            'white': {
+                'O-O': false,
+                'O-O-O': false,
+            },
+            'black': {
+                'O-O': false,
+                'O-O-O': false,
+            }
+        }
+
+        this.enPassant = null
 
         this.data = []
 
@@ -219,6 +245,11 @@ class BoardState {
     print() {
         console.log('move ' + this.moveNumber)
         console.log(this.turn + ' to move')
+        var enPassantString = '-'
+        if (this.enPassant != null) {
+            enPassantString = toNotation(this.enPassant)
+        }
+        console.log('en passant: ' + enPassantString)
         console.log('  ' + '-'.repeat(19))
         for (var i = 0; i < 8; i++) {
             let slice = this.data.slice(8*i, 8*i + 8)
@@ -405,6 +436,44 @@ class Game {
 
     }
 
+    canKingCastleShort(boardState, color) {
+        var kingLoc = boardState
+    }
+
+    getPGNDictionary(boardState, matrix) {
+        var dict = {}
+        for (var i = 0; i < 64; i++) {
+            var loc = indexToLoc(i)
+            var moves = matrix[i]
+            moves.forEach(loc2 => {
+                var PGN = this.toPGNMove(boardState, loc, loc2)
+                dict[PGN] = {
+                    loc: loc,
+                    loc2: loc2,
+                }
+            })
+        }
+
+        return dict
+    }
+
+    getLegalMoveMatrixOfColor(boardState, color) {
+        var matrix = []
+
+        for (var i = 0; i < 64; i++) {
+            var loc = indexToLoc(i)
+            var piece = boardState.piece(loc)
+            var info = pieceInfo(piece)
+            if (info.color == color) {
+                matrix[i] = this.getLegalMoves(boardState, indexToLoc(i))
+            } else {
+                matrix[i] = []
+            }
+        }
+
+        return matrix
+    }
+
     getLegalMoveMatrix(boardState) {
         var matrix = []
 
@@ -472,10 +541,16 @@ class Game {
                     }
                 }
 
-                if (boardState.getOccupancy(captureLeft, info.color) == occupancy.ENEMY) {
+                var onPromotionRow = (info.color == colors.BLACK && loc.y == 1) || (info.color == colors.WHITE && loc.y == 6)
+
+                var leftOc = boardState.getOccupancy(captureLeft, info.color)
+                var rightOc = boardState.getOccupancy(captureRight, info.color)
+
+                if (leftOc == occupancy.ENEMY || isEqual(captureLeft, boardState.enPassant)) {
                     moves.push(captureLeft)
-                }
-                if (boardState.getOccupancy(captureRight, info.color) == occupancy.ENEMY) {
+                } 
+
+                if (rightOc == occupancy.ENEMY || isEqual(captureRight, boardState.enPassant)) {
                     moves.push(captureRight)
                 }
                 break
@@ -535,30 +610,99 @@ class Game {
         return moves
     }
 
+    processMove(boardState, loc, loc2) {
+        var piece = boardState.piece(loc)
+        var info = pieceInfo(piece)
+        if (piece == ' ') {
+            throw "Trying to move piece that doesn't exist"
+        }
+
+        
+        if (info.type == pieces.PAWN) {
+            
+            if (isEqual(boardState.enPassant, loc2)) {
+                console.log('capturing en passant')
+                // En Passant - Capturing
+                var captureLoc
+                if (info.color == colors.WHITE) {
+                    captureLoc = {x: boardState.enPassant.x, y: boardState.enPassant.y - 1}
+                } else {
+                    captureLoc = {x: boardState.enPassant.x, y: boardState.enPassant.y + 1}
+                }
+
+                if (pieceInfo(boardState.piece(captureLoc)).type != pieces.PAWN) {
+                    throw 'en passant - captured pawn not found on ' + toNotation(captureLoc)
+                }
+
+                boardState.remove(captureLoc)
+                boardState.enPassant = null
+            } else {
+                // En Passant - Enabling
+                if (isEqual(loc2, t(loc, direction.VERTICAL, 2))) {
+                    boardState.enPassant = t(loc, direction.VERTICAL, 1)
+                } else if (isEqual(loc2, t(loc, direction.VERTICAL, -2))) {
+                    boardState.enPassant = t(loc, direction.VERTICAL, -1)
+                } else {
+                    boardState.enPassant = null
+                }
+            }   
+        } else {
+            boardState.enPassant = null
+        }
+
+        boardState.move(loc, loc2)
+
+        return copyBoardState(boardState)
+
+    }
+
+    async makeMove(boardState, color) {
+        boardState.print()
+        var valid = false
+
+        // Generate dictionary
+        var mat = this.getLegalMoveMatrixOfColor(boardState, color)
+        var dict = this.getPGNDictionary(boardState, mat)
+
+        while (!valid) {
+            var move = await input.text('Please enter a move: ')
+            move = move.trim()
+            if (move in dict) {
+                var newBoardState = this.processMove(boardState, dict[move].loc, dict[move].loc2)
+                return newBoardState
+            } else {
+                console.log('Invalid move. Legal moves are: ' + Object.keys(dict).join(', '))
+            }
+        }
+    }
+
+    async playCLIGame(initialBoardState) {
+        this.move = 1
+        this.turn = colors.WHITE
+        this.history = [initialBoardState]
+        var done = false
+        while (!done) {
+            var newBoardState = await this.makeMove(this.history[this.history.length - 1], this.turn)
+            if (this.turn == colors.BLACK) {
+                this.move += 1
+            }
+            this.turn = enemyColor(this.turn)
+            newBoardState.moveNumber = this.move
+            newBoardState.turn = this.turn
+            this.history.push(newBoardState)
+        }
+        
+    }
+
 
 }
 
 var boardState = fromFEN('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')
-boardState.move(loc('e2'), loc('e4'))
-boardState.move(loc('f2'), loc('f4'))
-boardState.move(loc('g2'), loc('g4'))
-boardState.move(loc('b7'), loc('b5'))
-boardState.move(loc('d1'), loc('e5'))
 
-boardState.move(loc('h8'), loc('e3'))
-boardState.move(loc('e1'), loc('d1'))
-boardState.move(loc('a8'), loc('d6'))
 var game = new Game(boardState)
-game.history[0].print()
+game.playCLIGame(boardState)
 
-var mat = game.getLegalMoveMatrix(boardState)
 
-mat.forEach((elem, index) => {
-    var loc = indexToLoc(index)
-    if (elem.length != 0) {
-        console.log(toNotation(loc) + ': ' + elem.map(value => game.toPGNMove(boardState, loc, value)).join(' '))
-    }
-})
 
 
 
