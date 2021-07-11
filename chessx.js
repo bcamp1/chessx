@@ -276,7 +276,7 @@ class BoardState {
     move(loc, loc2) {
         var piece = this.piece(loc)
         if (piece == ' ') {
-            throw "Trying to move piece that doesn't exist"
+            throw "boardState.move: Trying to move piece that doesn't exist"
         }
 
         this.insert(piece, loc2)
@@ -383,7 +383,7 @@ class Game {
     toPGNMove(boardState, loc, loc2) {
         var piece = boardState.piece(loc)
         if (piece == ' ') {
-            throw "Trying to move piece that doesn't exist"
+            throw "toPGNMove: Trying to move piece that doesn't exist"
         }
 
         var pieceLetter = piece.toUpperCase()
@@ -434,6 +434,18 @@ class Game {
 
         return false
 
+    }
+
+    isKingInCheckMate(boardState, color) {
+        var mat = this.getLegalMoveMatrixOfColor(boardState, color)
+        var dict = this.getPGNDictionary(boardState, mat)
+        return Object.keys(dict) == 0 && this.isKingInCheck(boardState, color)
+    }
+
+    isKingInStaleMate(boardState, color) {
+        var mat = this.getLegalMoveMatrixOfColor(boardState, color)
+        var dict = this.getPGNDictionary(boardState, mat)
+        return Object.keys(dict) == 0 && !this.isKingInCheck(boardState, color)
     }
 
     canKingCastleShort(boardState, color) {
@@ -489,8 +501,11 @@ class Game {
         var legalMoves = []
         var rawMoves = this.getRawMoves(boardState, loc)
         rawMoves.forEach(rawMove => {
-            var theoreticalBoard = copyBoardState(boardState)
-            theoreticalBoard.move(loc, rawMove)
+            // var theoreticalBoard = copyBoardState(boardState)
+            // theoreticalBoard.move(loc, rawMove)
+            //console.log('checking ' + this.toPGNMove(boardState, loc, rawMove))
+
+            var theoreticalBoard = this.processMove(copyBoardState(boardState), loc, rawMove)
             if (!this.isKingInCheck(theoreticalBoard, info.color)) {
                 legalMoves.push(rawMove)
             }
@@ -614,7 +629,10 @@ class Game {
         var piece = boardState.piece(loc)
         var info = pieceInfo(piece)
         if (piece == ' ') {
-            throw "Trying to move piece that doesn't exist"
+            console.log('ERROR')
+            console.log(`loc: ${toNotation(loc)}, loc2: ${toNotation(loc2)}`)
+            boardState.print()
+            throw "processMove: Trying to move piece that doesn't exist"
         }
 
         
@@ -682,6 +700,13 @@ class Game {
         this.history = [initialBoardState]
         var done = false
         while (!done) {
+            if (this.isKingInCheckMate(this.history[this.history.length - 1], this.turn)) {
+                console.log('CHECKMATE - ' + enemyColor(this.turn) + ' wins!')
+                return
+            } else if (this.isKingInStaleMate(this.history[this.history.length - 1], this.turn)) {
+                console.log('STALEMATE - draw!')
+                return
+            }
             var newBoardState = await this.makeMove(this.history[this.history.length - 1], this.turn)
             if (this.turn == colors.BLACK) {
                 this.move += 1
@@ -700,7 +725,11 @@ class Game {
 var boardState = fromFEN('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')
 
 var game = new Game(boardState)
-game.playCLIGame(boardState)
+game.playCLIGame(boardState).then(() => {
+    console.log('Game finished.')
+}).catch(error => {
+    console.error('CLIGame Error: ' + error)
+})
 
 
 
